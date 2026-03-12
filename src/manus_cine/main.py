@@ -3,6 +3,9 @@
 import logging
 import os
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from .feishu import send_trailer_to_feishu
 from .manus import recommend_movie
@@ -10,7 +13,7 @@ from .storage import get_recommended_ids, save_recommendation
 from .trailer import generate_trailer, save_trailer
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -23,34 +26,54 @@ def _env(name: str) -> str:
     return val
 
 
+MOCK_RECOMMENDATION: dict = {
+    "director": "斯坦利·库布里克",
+    "movie": "2001太空漫游",
+    "year": 1968,
+    "reason": "影史经典，探讨人类进化与技术的哲学命题。",
+    "brief": "人类从猿到太空的进化史诗，AI HAL 9000 的叛变成为科幻经典。",
+}
+
+
 def main() -> None:
     """Run the full pipeline."""
-    api_key = _env("MANUS_API_KEY")
+    root = Path(__file__).resolve().parent.parent.parent
+    load_dotenv(root / ".env")
+    load_dotenv(root / ".env.local")
+
+    mock_mode = os.environ.get("MOCK_MODE", "").lower() in ("1", "true", "yes")
+    if mock_mode:
+        logger.info("MOCK_MODE enabled: skipping Manus API call")
+
     app_id = _env("FEISHU_APP_ID")
     app_secret = _env("FEISHU_APP_SECRET")
     chat_id = _env("FEISHU_CHAT_ID")
+    receive_id_type = os.environ.get("FEISHU_RECEIVE_ID_TYPE", "chat_id")
 
     excluded = get_recommended_ids()
     logger.info("Excluding %d already recommended movies", len(excluded))
 
-    try:
-        data = recommend_movie(api_key, excluded)
-    except Exception as e:
-        logger.exception("Manus API failed: %s", e)
-        sys.exit(2)
+    if mock_mode:
+        data = MOCK_RECOMMENDATION.copy()
+    else:
+        api_key = _env("MANUS_API_KEY")
+        try:
+            data = recommend_movie(api_key, excluded)
+        except Exception as e:
+            logger.exception("Manus API failed: %s", e)
+            sys.exit(2)
 
     director = data.get("director", "?")
     movie = data.get("movie", "?")
     logger.info("Recommended: %s - %s", director, movie)
 
-    # Persist
-    save_recommendation(data)
+    if not mock_mode:
+        save_recommendation(data)
     trailer_path = save_trailer(data)
     content = generate_trailer(data)
 
-    # Send to Feishu
     try:
-        send_trailer_to_feishu(app_id, app_secret, chat_id, content)
+        send_trailer_to_feishu(app_id, app_secret, chat_id, content, receive_id_type)
     except Exception as e:
         logger.exception("Feishu send failed: %s", e)
         sys.exit(2)

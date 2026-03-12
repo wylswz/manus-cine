@@ -1,5 +1,6 @@
-"""Feishu (Lark) API client for sending messages."""
+"""Feishu (Lark) API client."""
 
+import json
 import logging
 from typing import Any
 
@@ -12,12 +13,8 @@ MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages"
 
 
 def get_tenant_access_token(app_id: str, app_secret: str) -> str:
-    """Get Feishu tenant_access_token."""
     with httpx.Client(timeout=30.0) as client:
-        r = client.post(
-            TOKEN_URL,
-            json={"app_id": app_id, "app_secret": app_secret},
-        )
+        r = client.post(TOKEN_URL, json={"app_id": app_id, "app_secret": app_secret})
         r.raise_for_status()
         data = r.json()
     if data.get("code") != 0:
@@ -25,39 +22,41 @@ def get_tenant_access_token(app_id: str, app_secret: str) -> str:
     return data["tenant_access_token"]
 
 
-def send_text_message(
-    token: str, chat_id: str, text: str, receive_id_type: str = "chat_id"
+def send_message(
+    token: str,
+    receive_id: str,
+    receive_id_type: str,
+    text: str,
 ) -> dict[str, Any]:
-    """Send text message to Feishu chat."""
-    import json as _json
-    content_json = _json.dumps({"text": text}, ensure_ascii=False)
+    payload = json.dumps({
+        "receive_id": receive_id,
+        "msg_type": "text",
+        "content": json.dumps({"text": text}, ensure_ascii=False),
+    }, ensure_ascii=False)
     with httpx.Client(timeout=30.0) as client:
         r = client.post(
-            f"{MESSAGE_URL}?receive_id_type={receive_id_type}",
+            MESSAGE_URL,
+            params={"receive_id_type": receive_id_type},
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json; charset=utf-8",
             },
-            json={
-                "receive_id": chat_id,
-                "msg_type": "text",
-                "content": content_json,
-            },
+            content=payload.encode("utf-8"),
         )
-        r.raise_for_status()
-        return r.json()
+    logger.debug("Feishu response: %s %s", r.status_code, r.text)
+    resp = r.json()
+    if resp.get("code") != 0:
+        raise RuntimeError(f"Feishu send error: {resp}")
+    return resp
 
 
 def send_trailer_to_feishu(
-    app_id: str, app_secret: str, chat_id: str, markdown_content: str
+    app_id: str,
+    app_secret: str,
+    chat_id: str,
+    text: str,
+    receive_id_type: str = "chat_id",
 ) -> None:
-    """
-    Get token and send trailer content to Feishu.
-    Uses text message; Feishu text supports basic formatting.
-    """
     token = get_tenant_access_token(app_id, app_secret)
-    # Truncate if too long (Feishu text limit ~4k)
-    if len(markdown_content) > 3500:
-        markdown_content = markdown_content[:3500] + "\n\n...(内容过长已截断)"
-    send_text_message(token, chat_id, markdown_content)
-    logger.info("Sent trailer to Feishu chat %s", chat_id)
+    send_message(token, chat_id, receive_id_type, text)
+    logger.info("Sent to Feishu %s %s", receive_id_type, chat_id)
