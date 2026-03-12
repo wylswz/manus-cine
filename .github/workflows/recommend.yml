@@ -2,8 +2,8 @@ name: Recommend Movie
 
 on:
   schedule:
-    # Run daily at 09:00 UTC (17:00 Beijing)
-    - cron: "0 9 * * *"
+    # Run every Monday at 01:00 UTC (09:00 Beijing)
+    - cron: "0 1 * * 1"
   workflow_dispatch: # Allow manual trigger
 
 jobs:
