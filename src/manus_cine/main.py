@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from .feishu import send_trailer_to_feishu
 from .manus import recommend_movie
-from .storage import get_recommended_ids, save_recommendation
+from .storage import get_recommended_movies, save_recommendation
 from .trailer import generate_trailer, save_trailer
 
 logging.basicConfig(
@@ -50,15 +50,15 @@ def main() -> None:
     chat_id = _env("FEISHU_CHAT_ID")
     receive_id_type = os.environ.get("FEISHU_RECEIVE_ID_TYPE", "chat_id")
 
-    excluded = get_recommended_ids()
-    logger.info("Excluding %d already recommended movies", len(excluded))
+    excluded_movies = get_recommended_movies()
+    logger.info("Excluding %d already recommended movies", len(excluded_movies))
 
     if mock_mode:
         data = MOCK_RECOMMENDATION.copy()
     else:
         api_key = _env("MANUS_API_KEY")
         try:
-            data = recommend_movie(api_key, excluded)
+            data = recommend_movie(api_key, excluded_movies)
         except Exception as e:
             logger.exception("Manus API failed: %s", e)
             sys.exit(2)

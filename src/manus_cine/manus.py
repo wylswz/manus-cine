@@ -14,23 +14,31 @@ POLL_INTERVAL = 5
 MAX_POLLS = 60  # ~5 min
 
 
-def _build_prompt(excluded_ids: set[str]) -> str:
-    excluded = ", ".join(sorted(excluded_ids)[:50]) if excluded_ids else "（无）"
-    return f"""请推荐一位著名导演及其一部经典电影。
+def _build_prompt(excluded_movies: list[str]) -> str:
+    if excluded_movies:
+        excluded_block = "\n".join(f"- {m}" for m in excluded_movies)
+        excluded_note = f"以下电影已经推荐过，请勿重复选择：\n{excluded_block}"
+    else:
+        excluded_note = "目前尚无已推荐记录。"
+
+    return f"""你是一位资深影评人，请从影史中推荐一部值得深度品鉴的电影。
 
 要求：
-1. 导演需为影史公认大师（如希区柯克、库布里克、黑泽明、费里尼等）
-2. 电影需为该导演的代表作
-3. 严格按以下 JSON 格式返回，不要包含其他文字或 markdown 标记：
+1. 不限于知名导演，鼓励推荐被忽视的小众作品，尤其是欧洲艺术电影（东欧、北欧、南欧均可）、亚洲独立电影、拉美电影等
+2. 选片标准：在某一方面有突出成就即可，例如：影像构图、色彩运用、叙事结构、音效与配乐、时间感与节奏、对沉默与留白的处理……不必面面俱到
+3. {excluded_note}
+4. 严格只返回如下 JSON，不含任何其他文字或 markdown：
 {{
   "director": "导演中文名",
   "movie": "电影中文名",
+  "original_title": "原片名（英文或原语言）",
   "year": 年份数字,
-  "reason": "推荐理由，一两句话",
-  "brief": "电影简介，2-3句话"
+  "country": "出品国",
+  "synopsis": "剧情概述，用文学化的语言描述故事与人物，100字左右",
+  "visual_style": "影像风格描述：构图、色调、镜头语言、光影运用，80字左右",
+  "narrative": "叙事特点：时间结构、视角、节奏、主题意涵，80字左右",
+  "why_watch": "为什么值得一看：这部电影留下了什么，对观影者意味着什么，60字左右"
 }}
-
-已推荐过的电影（请勿重复）：{excluded}
 """
 
 
@@ -93,12 +101,12 @@ def _extract_json_from_output(output: list[dict]) -> dict[str, Any]:
     raise ValueError("Could not parse JSON from Manus output")
 
 
-def recommend_movie(api_key: str, excluded_ids: set[str]) -> dict[str, Any]:
+def recommend_movie(api_key: str, excluded_movies: list[str]) -> dict[str, Any]:
     """
     Call Manus API to get a movie recommendation.
-    Returns dict with director, movie, year, reason, brief.
+    Returns dict with director, movie, year, synopsis, visual_style, narrative, why_watch.
     """
-    prompt = _build_prompt(excluded_ids)
+    prompt = _build_prompt(excluded_movies)
     with httpx.Client(timeout=120.0) as client:
         task_id = create_task(client, api_key, prompt)
         logger.info("Created Manus task %s", task_id)

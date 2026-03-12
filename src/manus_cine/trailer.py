@@ -14,44 +14,59 @@ def _slug(text: str) -> str:
 
 
 def generate_trailer(data: dict) -> str:
-    """Generate Markdown trailer content from recommendation data."""
     director = data.get("director", "未知导演")
     movie = data.get("movie", "未知电影")
+    original_title = data.get("original_title", "")
     year = data.get("year", "")
-    reason = data.get("reason", "")
-    brief = data.get("brief", "")
+    country = data.get("country", "")
+    synopsis = data.get("synopsis", "")
+    visual_style = data.get("visual_style", "")
+    narrative = data.get("narrative", "")
+    why_watch = data.get("why_watch", "")
 
-    return f"""# 🎬 {movie}
+    title_line = f"{movie}"
+    if original_title and original_title != movie:
+        title_line += f"  /  {original_title}"
 
-**导演**：{director}  
-**年份**：{year}
+    meta_parts = [str(year) if year else "", country]
+    meta = "  ·  ".join(p for p in meta_parts if p)
+
+    sections = []
+
+    if synopsis:
+        sections.append(f"**故事**\n\n{synopsis}")
+
+    if visual_style:
+        sections.append(f"**影像**\n\n{visual_style}")
+
+    if narrative:
+        sections.append(f"**叙事**\n\n{narrative}")
+
+    if why_watch:
+        sections.append(f"**为何值得一看**\n\n{why_watch}")
+
+    body = "\n\n---\n\n".join(sections)
+
+    return f"""# {title_line}
+
+导演 {director}　{meta}
 
 ---
 
-## 推荐理由
-
-{reason}
+{body}
 
 ---
 
-## 剧情简介
-
-{brief}
-
----
-
-*由 manus-cine 推荐 · {datetime.now().strftime("%Y-%m-%d %H:%M")}*
+*{datetime.now().strftime("%Y.%m.%d")}　manus-cine*
 """
 
 
 def save_trailer(data: dict) -> Path:
-    """Save trailer Markdown to trailers/ and return path."""
     TRAILERS_DIR.mkdir(parents=True, exist_ok=True)
     date = datetime.now().strftime("%Y%m%d")
     d = _slug(data.get("director", ""))
     m = _slug(data.get("movie", ""))
     name = f"{date}_{d}_{m}.md"
     path = TRAILERS_DIR / name
-    content = generate_trailer(data)
-    path.write_text(content, encoding="utf-8")
+    path.write_text(generate_trailer(data), encoding="utf-8")
     return path
