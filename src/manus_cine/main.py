@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from .feishu import send_trailer_to_feishu
 from .manus import recommend_movie
 from .storage import get_recommended_movies, save_recommendation
-from .trailer import generate_trailer, save_trailer
+from .trailer import save_trailer
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -27,11 +27,15 @@ def _env(name: str) -> str:
 
 
 MOCK_RECOMMENDATION: dict = {
-    "director": "斯坦利·库布里克",
-    "movie": "2001太空漫游",
-    "year": 1968,
-    "reason": "影史经典，探讨人类进化与技术的哲学命题。",
-    "brief": "人类从猿到太空的进化史诗，AI HAL 9000 的叛变成为科幻经典。",
+    "director": "安德烈·塔可夫斯基",
+    "movie": "潜行者",
+    "original_title": "Stalker",
+    "year": 1979,
+    "country": "苏联",
+    "synopsis": "三个男人——作家、科学家与向导——穿越一片被称为「禁区」的神秘地带，前往据说能实现内心最深处愿望的「房间」。旅途漫长而沉默，他们带着各自的疑惑，在荒草与水泥之间一步步走向某种无法命名的边界。",
+    "visual_style": "几乎全片使用手持长镜头，镜头贴近地面游移，锈迹、积水、枯草构成一种腐败的诗意。色彩在黑白与褪色的土黄之间切换，禁区内部微微泛绿，仿佛一切都处于缓慢的生长与消解之中。",
+    "narrative": "叙事拒绝戏剧性，以沉默和等待代替事件。三个人物代表三种对意义的渴求，却在抵达终点时陷入彼此不同的虚无。时间在片中被拉伸，成为一种物质。",
+    "why_watch": "一部关于信仰本身的电影——不是信仰什么，而是信仰这件事还能否成立。它让你在结束后很久仍然坐着。",
 }
 
 
@@ -70,10 +74,9 @@ def main() -> None:
     if not mock_mode:
         save_recommendation(data)
     trailer_path = save_trailer(data)
-    content = generate_trailer(data)
 
     try:
-        send_trailer_to_feishu(app_id, app_secret, chat_id, content, receive_id_type)
+        send_trailer_to_feishu(app_id, app_secret, chat_id, data, receive_id_type)
     except Exception as e:
         logger.exception("Feishu send failed: %s", e)
         sys.exit(2)
