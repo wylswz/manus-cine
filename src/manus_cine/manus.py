@@ -59,12 +59,18 @@ def create_task(client: httpx.Client, api_key: str, prompt: str) -> str:
     return task_id
 
 
-def get_task(client: httpx.Client, api_key: str, task_id: str) -> dict[str, Any]:
-    """Get task by ID."""
+INITIAL_DELAY = 10  # seconds to wait before first poll
+
+
+def get_task(client: httpx.Client, api_key: str, task_id: str) -> dict[str, Any] | None:
+    """Get task by ID. Returns None if task not yet available (404)."""
     r = client.get(
         f"{MANUS_BASE}/v1/tasks/{task_id}",
         headers={"API_KEY": api_key},
     )
+    if r.status_code == 404:
+        logger.debug("Task %s not yet available (404), will retry", task_id)
+        return None
     r.raise_for_status()
     return r.json()
 
@@ -73,13 +79,20 @@ def poll_until_done(
     client: httpx.Client, api_key: str, task_id: str
 ) -> dict[str, Any]:
     """Poll task until completed or failed."""
-    for _ in range(MAX_POLLS):
+    logger.info("Waiting %ds before first poll...", INITIAL_DELAY)
+    time.sleep(INITIAL_DELAY)
+
+    for i in range(MAX_POLLS):
         task = get_task(client, api_key, task_id)
+        if task is None:
+            time.sleep(POLL_INTERVAL)
+            continue
         status = task.get("status", "")
         if status == "completed":
             return task
         if status == "failed":
             raise RuntimeError(f"Manus task failed: {task.get('error', 'unknown')}")
+        logger.debug("Poll %d: status=%s", i, status)
         time.sleep(POLL_INTERVAL)
     raise TimeoutError("Manus task did not complete in time")
 
