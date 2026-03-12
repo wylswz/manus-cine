@@ -13,7 +13,7 @@ from .storage import get_recommended_movies, save_recommendation
 from .trailer import save_trailer
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -26,28 +26,36 @@ def _env(name: str) -> str:
     return val
 
 
-MOCK_RECOMMENDATION: dict = {
-    "director": "安德烈·塔可夫斯基",
-    "movie": "潜行者",
-    "original_title": "Stalker",
-    "year": 1979,
-    "country": "苏联",
-    "synopsis": "三个男人——作家、科学家与向导——穿越一片被称为「禁区」的神秘地带，前往据说能实现内心最深处愿望的「房间」。旅途漫长而沉默，他们带着各自的疑惑，在荒草与水泥之间一步步走向某种无法命名的边界。",
-    "visual_style": "几乎全片使用手持长镜头，镜头贴近地面游移，锈迹、积水、枯草构成一种腐败的诗意。色彩在黑白与褪色的土黄之间切换，禁区内部微微泛绿，仿佛一切都处于缓慢的生长与消解之中。",
-    "narrative": "叙事拒绝戏剧性，以沉默和等待代替事件。三个人物代表三种对意义的渴求，却在抵达终点时陷入彼此不同的虚无。时间在片中被拉伸，成为一种物质。",
-    "why_watch": "一部关于信仰本身的电影——不是信仰什么，而是信仰这件事还能否成立。它让你在结束后很久仍然坐着。",
-}
+MOCK_MARKDOWN = """\
+# 潜行者 / Stalker
+导演：安德烈·塔可夫斯基　年份：1979　国家：苏联
+
+## 故事
+
+三个男人穿越名为「禁区」的神秘地带，前往据说能实现内心最深处愿望的「房间」。旅途漫长而沉默，他们带着各自的疑惑，在荒草与积水之间一步步走向某种无法命名的边界。
+
+## 影像
+
+全片几乎使用手持长镜头，镜头贴近地面游移，锈迹、积水、枯草构成腐败的诗意。色彩在黑白与土黄之间切换，禁区内部微微泛绿，仿佛一切处于缓慢的生长与消解之中。
+
+## 叙事
+
+叙事拒绝戏剧性，以沉默和等待代替事件。三个人物代表三种对意义的渴求，却在抵达终点时陷入彼此不同的虚无。时间在片中被拉伸，成为一种物质。
+
+## 为何值得一看
+
+一部关于信仰本身的电影——不是信仰什么，而是信仰这件事还能否成立。它让你在结束后很久仍然坐着。
+"""
 
 
 def main() -> None:
-    """Run the full pipeline."""
     root = Path(__file__).resolve().parent.parent.parent
     load_dotenv(root / ".env")
     load_dotenv(root / ".env.local")
 
     mock_mode = os.environ.get("MOCK_MODE", "").lower() in ("1", "true", "yes")
     if mock_mode:
-        logger.info("MOCK_MODE enabled: skipping Manus API call")
+        logger.info("MOCK_MODE: skipping Manus API call")
 
     app_id = _env("FEISHU_APP_ID")
     app_secret = _env("FEISHU_APP_SECRET")
@@ -58,30 +66,30 @@ def main() -> None:
     logger.info("Excluding %d already recommended movies", len(excluded_movies))
 
     if mock_mode:
-        data = MOCK_RECOMMENDATION.copy()
+        result = {"markdown": MOCK_MARKDOWN, "director": "安德烈·塔可夫斯基", "movie": "潜行者"}
     else:
         api_key = _env("MANUS_API_KEY")
         try:
-            data = recommend_movie(api_key, excluded_movies)
+            result = recommend_movie(api_key, excluded_movies)
         except Exception as e:
             logger.exception("Manus API failed: %s", e)
             sys.exit(2)
 
-    director = data.get("director", "?")
-    movie = data.get("movie", "?")
+    director = result["director"]
+    movie = result["movie"]
+    markdown = result["markdown"]
     logger.info("Recommended: %s - %s", director, movie)
 
     if not mock_mode:
-        save_recommendation(data)
-    trailer_path = save_trailer(data)
+        save_recommendation(director, movie)
+    trailer_path = save_trailer(markdown, director, movie)
+    logger.info("Trailer saved to %s", trailer_path)
 
     try:
-        send_trailer_to_feishu(app_id, app_secret, chat_id, data, receive_id_type)
+        send_trailer_to_feishu(app_id, app_secret, chat_id, markdown, receive_id_type)
     except Exception as e:
         logger.exception("Feishu send failed: %s", e)
         sys.exit(2)
-
-    logger.info("Trailer saved to %s", trailer_path)
 
 
 if __name__ == "__main__":

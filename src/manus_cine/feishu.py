@@ -2,7 +2,6 @@
 
 import json
 import logging
-from datetime import datetime
 from typing import Any
 
 import httpx
@@ -23,49 +22,31 @@ def get_tenant_access_token(app_id: str, app_secret: str) -> str:
     return data["tenant_access_token"]
 
 
-def _post_content(data: dict) -> dict:
-    """Build Feishu post (富文本) content from movie recommendation data."""
-    director = data.get("director", "")
-    movie = data.get("movie", "")
-    original_title = data.get("original_title", "")
-    year = data.get("year", "")
-    country = data.get("country", "")
-    synopsis = data.get("synopsis", "")
-    visual_style = data.get("visual_style", "")
-    narrative = data.get("narrative", "")
-    why_watch = data.get("why_watch", "")
+def _md_to_post(markdown: str) -> dict:
+    """Convert simple Markdown report to Feishu post (富文本) format."""
+    title = ""
+    lines: list[list[dict]] = []
 
-    title = movie
-    if original_title and original_title != movie:
-        title = f"{movie}  /  {original_title}"
+    for line in markdown.splitlines():
+        stripped = line.strip()
 
-    meta_parts = [str(year) if year else "", country, f"导演：{director}"]
-    meta = "　".join(p for p in meta_parts if p)
+        if stripped.startswith("# "):
+            title = stripped[2:].strip()
+            continue
 
-    def section(label: str, body: str) -> list[list[dict]]:
-        return [
-            [{"tag": "text", "text": label, "style": ["bold"]}],
-            [{"tag": "text", "text": body}],
-            [{"tag": "text", "text": ""}],
-        ]
+        if stripped.startswith("## "):
+            section = stripped[3:].strip()
+            if lines:
+                lines.append([{"tag": "text", "text": ""}])
+            lines.append([{"tag": "text", "text": section, "style": ["bold"]}])
+            continue
 
-    lines: list[list[dict]] = [
-        [{"tag": "text", "text": meta}],
-        [{"tag": "text", "text": ""}],
-    ]
+        if stripped in ("---", ""):
+            continue
 
-    if synopsis:
-        lines += section("故事", synopsis)
-    if visual_style:
-        lines += section("影像", visual_style)
-    if narrative:
-        lines += section("叙事", narrative)
-    if why_watch:
-        lines += section("为何值得一看", why_watch)
+        lines.append([{"tag": "text", "text": stripped}])
 
-    lines.append([{"tag": "text", "text": datetime.now().strftime("%Y.%m.%d") + "　manus-cine"}])
-
-    return {"zh_cn": {"title": title, "content": lines}}
+    return {"zh_cn": {"title": title or "今日推荐", "content": lines}}
 
 
 def send_message(
@@ -75,11 +56,10 @@ def send_message(
     msg_type: str,
     content: str,
 ) -> dict[str, Any]:
-    payload = json.dumps({
-        "receive_id": receive_id,
-        "msg_type": msg_type,
-        "content": content,
-    }, ensure_ascii=False)
+    payload = json.dumps(
+        {"receive_id": receive_id, "msg_type": msg_type, "content": content},
+        ensure_ascii=False,
+    )
     with httpx.Client(timeout=30.0) as client:
         r = client.post(
             MESSAGE_URL,
@@ -101,11 +81,11 @@ def send_trailer_to_feishu(
     app_id: str,
     app_secret: str,
     chat_id: str,
-    data: dict,
+    markdown: str,
     receive_id_type: str = "chat_id",
 ) -> None:
     token = get_tenant_access_token(app_id, app_secret)
-    post = _post_content(data)
+    post = _md_to_post(markdown)
     send_message(
         token,
         chat_id,

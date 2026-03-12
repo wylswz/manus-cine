@@ -11,14 +11,12 @@ RECOMMENDED_DIR = Path(__file__).resolve().parent.parent.parent / "recommended"
 
 
 def _slug(text: str) -> str:
-    """Create filesystem-safe slug from text."""
     s = re.sub(r"[^\w\s-]", "", text)
     s = re.sub(r"[-\s]+", "_", s).strip().lower()
     return s[:64] if s else "unknown"
 
 
 def get_recommended_ids() -> set[str]:
-    """Return set of 'director_slug_movie_slug' keys for dedup."""
     ids: set[str] = set()
     if not RECOMMENDED_DIR.exists():
         return ids
@@ -30,12 +28,12 @@ def get_recommended_ids() -> set[str]:
             if d and m:
                 ids.add(f"{d}_{m}")
         except Exception as e:
-            logger.warning("Skip invalid recommended file %s: %s", f, e)
+            logger.warning("Skip %s: %s", f, e)
     return ids
 
 
 def get_recommended_movies() -> list[str]:
-    """Return list of 'Director - Movie' strings to pass to Manus."""
+    """Return 'Director - Movie' list to pass to Manus."""
     movies: list[str] = []
     if not RECOMMENDED_DIR.exists():
         return movies
@@ -47,17 +45,17 @@ def get_recommended_movies() -> list[str]:
             if d and m:
                 movies.append(f"{d} - {m}")
         except Exception as e:
-            logger.warning("Skip invalid recommended file %s: %s", f, e)
+            logger.warning("Skip %s: %s", f, e)
     return sorted(movies)
 
 
-def save_recommendation(data: dict) -> Path:
-    """Save recommendation to recommended/ and return the file path."""
+def save_recommendation(director: str, movie: str) -> Path:
     RECOMMENDED_DIR.mkdir(parents=True, exist_ok=True)
-    d = _slug(data.get("director", "unknown"))
-    m = _slug(data.get("movie", "unknown"))
-    name = f"{d}_{m}.json"
+    name = f"{_slug(director)}_{_slug(movie)}.json"
     path = RECOMMENDED_DIR / name
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("Saved recommendation to %s", path)
+    path.write_text(
+        json.dumps({"director": director, "movie": movie}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.info("Saved recommendation: %s", path)
     return path
