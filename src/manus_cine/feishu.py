@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages"
+IMAGE_UPLOAD_URL = "https://open.feishu.cn/open-apis/im/v1/images"
 
 
 def get_tenant_access_token(app_id: str, app_secret: str) -> str:
@@ -22,8 +23,42 @@ def get_tenant_access_token(app_id: str, app_secret: str) -> str:
     return data["tenant_access_token"]
 
 
-def _md_to_post(markdown: str) -> dict:
-    """Convert simple Markdown report to Feishu post (富文本) format."""
+def _image_content_type(image_bytes: bytes) -> tuple[str, str]:
+    """Return (filename, content_type) for Feishu upload."""
+    if image_bytes[:8].startswith(b"\x89PNG"):
+        return "poster.png", "image/png"
+    if image_bytes[:2] == b"\xff\xd8":
+        return "poster.jpg", "image/jpeg"
+    return "poster.jpg", "image/jpeg"
+
+
+def upload_image(token: str, image_bytes: bytes) -> str:
+    """Upload image to Feishu, return image_key for use in post."""
+    fname, content_type = _image_content_type(image_bytes)
+    with httpx.Client(timeout=30.0) as client:
+        r = client.post(
+            IMAGE_UPLOAD_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            files={
+                "image_type": (None, "message"),
+                "image": (fname, image_bytes, content_type),
+            },
+        )
+    if r.status_code != 200:
+        raise RuntimeError(
+            f"Feishu image upload HTTP {r.status_code}: {r.text[:300]}"
+        )
+    data = r.json()
+    if data.get("code") != 0:
+        raise RuntimeError(f"Feishu image upload error code {data.get('code')}: {data}")
+    image_key = data.get("data", {}).get("image_key")
+    if not image_key:
+        raise ValueError("Feishu did not return image_key")
+    return image_key
+
+
+def _md_to_post(markdown: str, image_key: str | None = None) -> dict:
+    """Convert simple Markdown report to Feishu post (富文本) format. Optionally insert poster image at top."""
     title = ""
     lines: list[list[dict]] = []
 
@@ -46,7 +81,11 @@ def _md_to_post(markdown: str) -> dict:
 
         lines.append([{"tag": "text", "text": stripped}])
 
-    return {"zh_cn": {"title": title or "今日推荐", "content": lines}}
+    content = lines
+    if image_key:
+        content = [[{"tag": "img", "image_key": image_key}], [{"tag": "text", "text": ""}]] + content
+
+    return {"zh_cn": {"title": title or "今日推荐", "content": content}}
 
 
 def send_message(
@@ -83,9 +122,10 @@ def send_trailer_to_feishu(
     chat_id: str,
     markdown: str,
     receive_id_type: str = "chat_id",
+    image_key: str | None = None,
 ) -> None:
     token = get_tenant_access_token(app_id, app_secret)
-    post = _md_to_post(markdown)
+    post = _md_to_post(markdown, image_key=image_key)
     send_message(
         token,
         chat_id,
@@ -93,4 +133,4 @@ def send_trailer_to_feishu(
         msg_type="post",
         content=json.dumps(post, ensure_ascii=False),
     )
-    logger.info("Sent to Feishu %s %s", receive_id_type, chat_id)
+    logger.info("Sent to Feishu %s %s (with image: %s)", receive_id_type, chat_id, bool(image_key))

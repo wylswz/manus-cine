@@ -1,6 +1,7 @@
 """Manus API client for movie recommendations."""
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -33,6 +34,8 @@ def _build_prompt(excluded_movies: list[str]) -> str:
 
 报告格式（严格按此格式输出，不要其他内容）：
 
+**输出要求：直接从下面格式的第一行开始输出，不要有任何前言、说明或对话性文字。**
+
 # 电影名 / Original Title
 导演：XXX　年份：YYYY　国家：Country
 
@@ -57,6 +60,8 @@ def _build_prompt(excluded_movies: list[str]) -> str:
 
 ## 同行评价（如有）
 来自电影行业德高望重的导演、编剧、摄影师、制片人对该电影的评价
+
+重要：请**以附件/文件形式单独输出** 1 张该电影的海报或经典镜头截图（使用平台的「上传/输出文件」能力），不要在图里写链接，正文报告里也不要出现任何配图或图片链接。我们会用你输出的文件在本地组装推送。
 """
 
 
@@ -105,45 +110,168 @@ def poll_until_done(client: httpx.Client, api_key: str, task_id: str) -> dict[st
     raise TimeoutError("Manus task did not complete in time")
 
 
+def _looks_like_report(text: str) -> bool:
+    """True if text IS the report: starts directly with the markdown title line."""
+    t = text.strip()
+    if not t or len(t) < 100:
+        return False
+    # The report always starts with the movie title as a top-level heading.
+    # Conversational preambles ("我已经为你挑选了…") never start with "# ".
+    if not t.startswith("# "):
+        return False
+    has_section = "## 故事" in t or "## 影像" in t or "导演：" in t
+    return bool(has_section)
+
+
 def _extract_text_from_output(output: list[dict]) -> str:
-    """Extract the markdown report text from Manus task output."""
-    for msg in reversed(output):
+    """Extract the markdown report body from Manus task output. Prefer the block that looks like the actual report (## 故事, 导演：), not the short meta-description."""
+    candidates: list[str] = []
+    for msg in output:
         if msg.get("role") != "assistant":
             continue
         for c in msg.get("content", []):
-            if c.get("type") == "output_text" and c.get("text", "").strip():
-                return c["text"].strip()
-    raise ValueError("No text output found in Manus response")
+            if c.get("type") != "output_text":
+                continue
+            t = (c.get("text") or "").strip()
+            if not t:
+                continue
+            candidates.append(t)
+    if not candidates:
+        raise ValueError("No text output found in Manus response")
+    # Prefer the one that looks like our report format
+    for t in candidates:
+        if _looks_like_report(t):
+            return t
+    # Else return the longest (report is usually longer than meta-description)
+    return max(candidates, key=len)
+
+
+def _extract_output_files(output: list[dict]) -> list[dict[str, str]]:
+    """Extract output_file items from Manus task output (e.g. image attachments). Returns list of {file_url, file_name, mime_type}."""
+    files: list[dict[str, str]] = []
+    for msg in output:
+        if msg.get("role") != "assistant":
+            continue
+        for c in msg.get("content", []):
+            if c.get("type") != "output_file":
+                continue
+            url = c.get("fileUrl") or c.get("file_url")
+            if not url:
+                continue
+            name = c.get("fileName") or c.get("file_name") or "image"
+            mime = (c.get("mimeType") or c.get("mime_type") or "").lower()
+            is_image = (
+                mime.startswith("image/")
+                or name.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"))
+            )
+            if is_image:
+                files.append({"file_url": url, "file_name": name, "mime_type": mime or "image/jpeg"})
+    return files
 
 
 def parse_metadata(markdown: str) -> dict[str, str]:
-    """Extract director and movie name from markdown header lines."""
+    """Extract director, movie, year and optional English title from markdown header lines."""
     director = ""
     movie = ""
+    year = ""
+    original_title = ""
     for line in markdown.splitlines():
         line = line.strip()
         if line.startswith("# "):
             # "# 电影名 / Original Title"  or  "# 电影名"
-            title_part = line[2:].split(" / ")[0].split("/")[0].strip()
-            movie = title_part
+            rest = line[2:].strip()
+            parts = rest.split(" / ", 1)
+            movie = parts[0].split("/")[0].strip()
+            if len(parts) > 1:
+                original_title = parts[1].strip()
         if line.startswith("导演：") or line.startswith("**导演**："):
             part = line.replace("**导演**：", "").replace("导演：", "")
             director = part.split("　")[0].split(" ")[0].strip()
+        if "年份：" in line or "**年份**：" in line:
+            part = line.replace("**年份**：", "").split("年份：")[-1]
+            year = part.split("　")[0].split(" ")[0].strip()
         if movie and director:
             break
-    return {"director": director, "movie": movie}
+    return {"director": director, "movie": movie, "year": year, "original_title": original_title}
 
 
-def recommend_movie(api_key: str, excluded_movies: list[str]) -> dict[str, str]:
+# Match Markdown image syntax ![alt](url). URL can be any non-) chars.
+_IMG_RE = re.compile(r"!\[[^\]]*\]\s*\(\s*(https?://[^)\s]+)\s*\)")
+_HTTP_RE = re.compile(r"https?://[^\s)\]]+", re.IGNORECASE)
+
+
+def extract_image_urls(markdown: str) -> list[str]:
+    """Collect image URLs from markdown: ![alt](url) anywhere, and plain http(s) URLs in ## 配图 section."""
+    urls: list[str] = []
+    in_fig = False
+    for line in markdown.splitlines():
+        s = line.strip()
+        if s.startswith("## ") and "配图" in s:
+            in_fig = True
+            continue
+        if in_fig and s.startswith("## "):
+            in_fig = False
+        if in_fig and s and ("http://" in s or "https://" in s):
+            # Plain URL line in 配图 section
+            m = _HTTP_RE.search(s)
+            if m:
+                urls.append(m.group(0).rstrip(".,;)"))
+        for m in _IMG_RE.finditer(line):
+            urls.append(m.group(1))
+    if not urls:
+        for m in _IMG_RE.finditer(markdown):
+            urls.append(m.group(1))
+    return urls
+
+
+def strip_fig_section(markdown: str) -> str:
+    """Remove ## 配图 ... block so we don't show raw URLs in Feishu post (image is embedded instead)."""
+    lines = markdown.splitlines()
+    out: list[str] = []
+    skip = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## ") and "配图" in stripped:
+            skip = True
+            continue
+        if skip and stripped.startswith("## "):
+            skip = False
+        if skip:
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def recommend_movie(
+    api_key: str,
+    excluded_movies: list[str],
+    resume_task_id: str | None = None,
+) -> dict[str, str]:
     """
     Call Manus API to get a movie recommendation.
-    Returns {"markdown": "...", "director": "...", "movie": "..."}.
+    If resume_task_id is provided, skip task creation and poll/fetch that task directly.
+    Returns {"markdown": "...", "director": "...", "movie": "...", "task_id": "..."}.
     """
-    prompt = _build_prompt(excluded_movies)
     with httpx.Client(timeout=120.0) as client:
-        task_id = create_task(client, api_key, prompt)
-        logger.info("Created Manus task %s", task_id)
-        task = poll_until_done(client, api_key, task_id)
-    markdown = _extract_text_from_output(task.get("output", []))
+        if resume_task_id:
+            logger.info("Resuming existing Manus task %s", resume_task_id)
+            task = get_task(client, api_key, resume_task_id)
+            if task is None:
+                raise ValueError(f"Task {resume_task_id} not found")
+            status = task.get("status", "")
+            if status not in ("completed", "failed"):
+                logger.info("Task %s status=%s, polling until done...", resume_task_id, status)
+                task = poll_until_done(client, api_key, resume_task_id)
+            elif status == "failed":
+                raise RuntimeError(f"Manus task {resume_task_id} already failed: {task.get('error')}")
+            task_id = resume_task_id
+        else:
+            prompt = _build_prompt(excluded_movies)
+            task_id = create_task(client, api_key, prompt)
+            logger.info("Created Manus task %s", task_id)
+            task = poll_until_done(client, api_key, task_id)
+    output = task.get("output", [])
+    markdown = _extract_text_from_output(output)
     meta = parse_metadata(markdown)
-    return {"markdown": markdown, **meta}
+    image_files = _extract_output_files(output)
+    return {"markdown": markdown, "image_files": image_files, "task_id": task_id, **meta}
